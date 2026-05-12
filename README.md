@@ -271,3 +271,75 @@ The future architecture addresses the main weaknesses of the current implementat
 - Saga-style coordination and asynchronous events improve resilience, but they also increase consistency design work and debugging difficulty.
 - Managed databases and Redis improve durability and scale, but they require schema migration discipline, backup operations, and capacity management.
 - Centralized observability and secret management improve supportability and security, but they add platform dependencies that the team must maintain.
+
+## Risk Storming Explanation
+
+Risk storming is a structured architecture review technique used to identify risks by looking at a system from several quality perspectives such as availability, scalability, security, operability, and maintainability. Instead of discussing architecture only from a feature perspective, the team evaluates what could fail if the project becomes successful and receives much higher traffic than the milestone demo.
+
+We applied risk storming to this project because the current repositories already show several production-sensitive decisions:
+
+- every business capability is split into separate services,
+- checkout depends on multiple synchronous downstream calls,
+- the current demo deployment still relies heavily on embedded H2 storage,
+- frontend traffic reaches backend services directly,
+- there is no dedicated observability or integration backbone.
+
+### Risk Matrix
+
+| Risk Area | Impact | Likelihood | Score | Level | Explanation | Mitigation |
+|---|---:|---:|---:|---|---|---|
+| Data durability and recovery | 3 | 3 | 9 | High | Auth, Inventory, Wallet, and Order default to service-local H2 storage, while Voucher uses H2 in the documented Cloud Run profile. Instance loss or bad rollout can lose state or make recovery difficult. | Move every service to managed databases with backup, recovery, and migration discipline. |
+| Checkout path availability | 3 | 3 | 9 | High | `Order` synchronously calls `Inventory`, `Wallet`, and `Voucher/Promo`. A slow or failing downstream service can block checkout entirely. | Keep only critical synchronous checks, add retries/timeouts/circuit breakers, and publish non-critical follow-up work through a broker. |
+| Edge security and trust boundary | 3 | 2 | 6 | High | The frontend directly calls multiple public backend URLs. JWT verification is distributed through shared secrets, and Voucher admin/internal access depends on header tokens and custom filters. | Add an API gateway, private service networking, centralized secret management, and stricter token validation boundaries. |
+| Scalability during war traffic | 3 | 2 | 6 | High | Flash-sale behavior concentrates load on Order, Inventory, Wallet, and Voucher quota checks. Active voucher reads and stock checks can spike at the same time. | Add autoscaling, cache hot reads, and use event-driven buffering for asynchronous work. |
+| Observability and incident response | 2 | 3 | 6 | High | No repository documents centralized tracing, correlation IDs, or cross-service alerting. Failures across multiple services will be hard to diagnose quickly. | Add centralized logs, metrics, tracing, dashboards, and alert rules. |
+| Deployment and configuration fragility | 2 | 2 | 4 | Medium | The repos rely on per-service environment variables and independent deploy commands. Token drift, CORS drift, or base URL mismatch can break the system even when each service still works individually. | Standardize deployment templates, secret storage, configuration contracts, and release checks. |
+
+Scoring used:
+
+- Impact: `1` low, `2` medium, `3` high
+- Likelihood: `1` low, `2` medium, `3` high
+- Score = `Impact x Likelihood`
+- Level mapping: `1-2` low, `3-4` medium, `6-9` high
+
+### Identified Risks in the Current Architecture
+
+The current architecture is already functionally split by bounded context, but it still behaves like a tightly coupled demo environment in several important ways:
+
+- data durability depends on per-service local storage instead of managed persistence,
+- order checkout has no isolation from downstream service outages,
+- public traffic reaches backend services directly instead of passing through a unified edge layer,
+- security and operational behavior are configured separately in each repo,
+- war-style traffic would stress the exact services that already sit in the critical checkout path.
+
+### Consensus Result
+
+The group consensus is that the highest-priority risks are:
+
+1. data loss or inconsistent recovery after deployment/runtime failure,
+2. checkout unavailability caused by the synchronous dependency chain,
+3. weak edge control caused by direct frontend-to-service traffic,
+4. poor diagnosability when failures span several services.
+
+These were treated as the key risks because they directly affect user trust, transaction success, and the team’s ability to operate the system once traffic grows.
+
+### Mitigation Strategy
+
+The proposed mitigation strategy is:
+
+- keep microservice boundaries, but strengthen the public edge with an API gateway,
+- replace embedded demo persistence with managed service-owned databases,
+- add event-driven communication for asynchronous and compensating work,
+- introduce centralized observability and alerting,
+- put internal traffic on private networking and manage secrets centrally,
+- add cache support for read-heavy paths such as active vouchers and popular catalog items.
+
+### How the Mitigations Influenced the Future Architecture
+
+The future architecture section is a direct consequence of the risk storming discussion:
+
+- the API gateway exists because the current public surface is too fragmented,
+- the event bus exists because the current checkout path is too tightly coupled,
+- managed databases and backup strategy exist because service-local H2 storage is too fragile,
+- Redis is introduced because war traffic will repeatedly hit the same catalog and voucher reads,
+- observability is elevated into its own platform concern because the current repositories do not provide cross-service visibility by default.

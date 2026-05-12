@@ -658,3 +658,68 @@ From an architecture-review perspective, the Inventory module reinforces several
 - **Data integrity sensitivity:** the service contains the main business rule that prevents negative stock, making it one of the core correctness boundaries in the current system.
 
 For that reason, Inventory is not only a supporting module. In the present architecture it behaves as one of the core reliability boundaries of the whole platform.
+
+## Individual Architecture Work
+ 
+My individual responsibility: **Order**
+ 
+### Component Diagram
+ 
+```mermaid
+flowchart LR
+    checkoutUi["Frontend checkout flow\n(frontend/src/pages/CheckoutPage.jsx)"]
+    ordersUi["Frontend order history\n(frontend/src/pages/OrdersPage.jsx)"]
+    jastiperUi["Frontend jastiper view\n(frontend/src/pages/JastiperOrdersPage.jsx)"]
+    adminUi["Frontend admin monitor\n(frontend/src/pages/AdminPage.jsx)"]
+ 
+    orderController["OrderController\nPOST /orders/checkout\nGET /orders/my\nGET /orders/my/active\nGET /orders/{id}\nPATCH /orders/{id}/status\nPOST /orders/{id}/cancel\nPOST /orders/{id}/rating\nGET /orders/jastiper\nGET /orders/admin"]
+ 
+    jwtFilter["JwtAuthenticationFilter\nvalidates Bearer JWT\nenforces ROLE_TITIPER / ROLE_JASTIPER / ROLE_ADMIN"]
+ 
+    orderService["OrderService\ncheckout orchestration\nlifecycle transitions\ncancel with refund\nrating"]
+ 
+    prepService["CheckoutPreparationService\nvalidate request\nfetch product snapshots\nvalidate voucher\ncalculate totals"]
+ 
+    compService["CheckoutCompensationService\nrefund wallet\nrestore stock"]
+ 
+    inventoryClient["InventoryClient\nGET /api/products/inventory/{id}\nPATCH reduce-stock\nPATCH restore-stock"]
+    walletClient["WalletClient\nPOST /wallet/balance\nPOST /wallet/deduct\nPOST /wallet/refund"]
+    voucherClient["VoucherClient\nPOST /vouchers/validate\nPOST /vouchers/claim"]
+ 
+    orderRepo["OrderRepository"]
+    orderItemRepo["OrderItemRepository"]
+    ratingRepo["RatingRepository"]
+    idemRepo["IdempotencyRecordRepository"]
+ 
+    orderDb[("Order database\norders\norder_items\nratings\nidempotency_records")]
+ 
+    checkoutUi -->|"POST /orders/checkout\nIdempotency-Key header"| jwtFilter
+    ordersUi -->|"GET /orders/my\nGET /orders/my/active\nGET /orders/{id}"| jwtFilter
+    jastiperUi -->|"GET /orders/jastiper\nPATCH /{id}/status\nPOST /{id}/cancel"| jwtFilter
+    adminUi -->|"GET /orders/admin\nPATCH /{id}/status\nPOST /{id}/cancel"| jwtFilter
+ 
+    jwtFilter --> orderController
+    orderController --> orderService
+ 
+    orderService --> prepService
+    orderService --> compService
+    orderService --> orderRepo
+    orderService --> orderItemRepo
+    orderService --> ratingRepo
+    orderService --> idemRepo
+ 
+    prepService --> inventoryClient
+    prepService --> voucherClient
+    compService --> walletClient
+    compService --> inventoryClient
+    orderService --> walletClient
+ 
+    orderRepo --> orderDb
+    orderItemRepo --> orderDb
+    ratingRepo --> orderDb
+    idemRepo --> orderDb
+```
+ 
+This component diagram expands the **Order API** container from the group container diagram. The Order service acts as the checkout orchestrator for the whole platform. It is responsible for coordinating product snapshot reads from Inventory, wallet balance checks and deductions from Wallet, voucher validation and quota claims from Voucher/Promo, and persisting the resulting order and its line items. It is the only service in the system that calls three other services in a single request path.
+ 
+The service also manages the full order lifecycle after checkout: status transitions driven by jastiper and buyer roles, cancel with automatic wallet refund and stock restoration, and buyer rating submission after order completion. An `IdempotencyRecordRepository` is wired into the checkout path to prevent duplicate orders on network retry or accidental double-submit from the frontend.

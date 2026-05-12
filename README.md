@@ -973,3 +973,142 @@ Second, the checkout path is the most business-critical transaction in the platf
 Third, the service manages state transitions that span multiple roles across time. A jastiper advancing an order to `SHIPPED` and a buyer confirming `COMPLETED` happen at different times, making the `status` column the main coordination point between actors. The `validateTransition` method enforces that only legal progressions are accepted and that cancelled or completed orders cannot be re-opened.
 
 These characteristics make Order a correctness boundary as well as a reliability boundary. The risk storming section in the group analysis identifies the synchronous checkout dependency chain as a high-priority risk. The current implementation partially mitigates it through compensation logic and idempotency, but full resilience would require circuit breakers on the downstream HTTP calls and event-driven propagation of post-payment side effects such as jastiper assignment and status notifications.
+
+
+### Component Diagram — Auth-Profile Service
+
+```mermaid
+flowchart TD
+    apiGateway["«external_container»\nAPI Gateway\n[Gateway]\nAccesses Auth-Profile Service\nand validates JWT"]
+    orderService["«external_container»\nOrder Service\n[Spring Boot Service]\nVerifies user role\nfor checkout/order"]
+
+    subgraph authService["Auth-Profile Service - Spring Boot [container]"]
+        authController["«component»\nAuthController\n[REST Controller]\nEndpoints: /register, /login, /logout"]
+        profileController["«component»\nProfileController\n[REST Controller]\nEndpoints: /profile, /profile/update"]
+        authSvc["«component»\nAuthService\n[Service]\nValidates credentials\nand generates JWT"]
+        profileSvc["«component»\nProfileService\n[Service]\nGet/update profile\nand role management"]
+        securityConfig["«component»\nSecurityConfig\n[Spring Security Config]\nFilter chain and\nrole-based access"]
+        jwtUtil["«component»\nJwtUtil\n[Utility]\nGenerates and validates\nJWT token"]
+        userRepo["«component»\nUserRepository\n[Spring Data JPA Repository]\nInterface to users\nand roles database"]
+    end
+
+    authDb[("Auth PostgreSQL Database\n[PostgreSQL]\nTables: users, roles")]
+
+    apiGateway -->|"Register, login, logout\n[REST HTTP]"| authController
+    apiGateway -->|"Get/update profile\n[REST HTTP]"| profileController
+    orderService -->|"Verify user role\n[Internal REST HTTP]"| authSvc
+    orderService -->|"Validate JWT request\n[HTTP Filter]"| securityConfig
+    authController -->|"Calls auth business logic"| authSvc
+    profileController -->|"Calls profile business logic"| profileSvc
+    authSvc -->|"Uses security rules"| securityConfig
+    authSvc -->|"Generate and validate JWT"| jwtUtil
+    profileSvc -->|"Validate token/profile access"| jwtUtil
+    profileSvc -->|"Read/write profile and role"| userRepo
+    securityConfig -->|"Uses JWT filter"| jwtUtil
+    securityConfig -->|"Load user detail and role"| userRepo
+    authSvc -->|"Read/write user credential and role"| userRepo
+    userRepo -->|"Read/Write [JPA/JDBC]"| authDb
+```
+
+### Code Diagram — AuthService Class Diagram
+
+```mermaid
+classDiagram
+    class AuthServiceImpl {
+        -userRepository: UserRepository
+        -jwtUtil: JwtUtil
+        -passwordEncoder: PasswordEncoder
+        +register(request: RegisterRequest): AuthResponse
+        +login(request: LoginRequest): AuthResponse
+        +logout(token: String): void
+    }
+    class AuthService {
+        <<interface>>
+        +register(request: RegisterRequest): AuthResponse
+        +login(request: LoginRequest): AuthResponse
+        +logout(token: String): void
+    }
+    class AuthController {
+        -authService: AuthService
+        +register(request: RegisterRequest): AuthResponse
+        +login(request: LoginRequest): AuthResponse
+        +logout(token: String): void
+    }
+    class UserRepository {
+        <<interface>>
+        +findByEmail(email: String): Optional~User~
+        +existsByEmail(email: String): boolean
+        +save(user: User): User
+    }
+    class JwtUtil {
+        +generateToken(user: User): String
+        +validateToken(token: String): boolean
+        +extractUsername(token: String): String
+    }
+    class PasswordEncoder {
+        <<interface>>
+        +encode(rawPassword: String): String
+        +matches(rawPassword: String, encodedPassword: String): boolean
+    }
+    class User {
+        -id: Long
+        -email: String
+        -password: String
+        -role: Role
+        -createdAt: LocalDateTime
+    }
+    class Role {
+        <<enumeration>>
+        TITIPER
+        JASTIPER
+        ADMIN
+    }
+    class RegisterRequest {
+        -email: String
+        -password: String
+        -name: String
+        -role: Role
+    }
+    class LoginRequest {
+        -email: String
+        -password: String
+    }
+    class AuthResponse {
+        -token: String
+        -userId: Long
+        -role: Role
+    }
+    AuthServiceImpl ..|> AuthService : implements
+    AuthController ..> AuthService : depends on
+    AuthServiceImpl ..> UserRepository : depends on
+    AuthServiceImpl ..> JwtUtil : depends on
+    AuthServiceImpl ..> PasswordEncoder : depends on
+    AuthServiceImpl ..> User : creates/validates
+    UserRepository ..> User : manages
+    JwtUtil ..> User : generate token from
+    User --> Role : has role
+    RegisterRequest --> Role : contains role
+    AuthResponse --> Role : returns role
+    AuthService ..> RegisterRequest : uses
+    AuthService ..> LoginRequest : uses
+    AuthService ..> AuthResponse : returns
+    AuthController ..> RegisterRequest : creates
+    AuthController ..> LoginRequest : uses
+    AuthController ..> AuthResponse : returns
+```
+
+### Architectural Interpretation
+
+Auth/Profile is the security foundation of the entire JSON platform. Every request to every other service depends on the JWT issued by this service, making Auth a hidden availability dependency across the whole system.
+
+Three primary risks in this module:
+
+First, if the Auth service goes down, no user can log in and all protected endpoints across every other service will reject requests. This is a silent single point of failure because other services do not explicitly declare a dependency on the Auth container, yet practically cannot function without a valid token.
+
+Second, a hardcoded or unrotated JWT secret becomes a critical vulnerability. If the secret leaks, an attacker can forge tokens for any role including ADMIN, bypassing all role-based access controls across the platform.
+
+Third, the current architecture has no rate limiting on the `/register` and `/login` endpoints, leaving them open to brute force attacks and account enumeration.
+
+Relevant future mitigations: centralized secret management (Vault or equivalent), rate limiting enforced at the API Gateway level, and a token refresh mechanism to reduce JWT lifetime exposure.
+
+These diagrams map directly to the Auth service source files at `Auth-Profile/src/main/java/id/ac/ui/cs/advprog/auth/`.git

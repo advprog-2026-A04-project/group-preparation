@@ -961,3 +961,15 @@ These code diagrams map directly to the Order service source files:
 - The external callers shown in the component diagram map to `frontend/src/pages/CheckoutPage.jsx`, `frontend/src/pages/OrdersPage.jsx`, `frontend/src/pages/JastiperOrdersPage.jsx`, and `frontend/src/pages/AdminPage.jsx`
 
 Together these diagrams show that my individual work is centered on checkout orchestration across three downstream services, full order lifecycle management, cancel with idempotent refund, dual-dimension buyer rating, and retry-safe checkout through an idempotency key mechanism.
+
+### Architectural Interpretation
+
+From an architecture-review perspective, the Order module is the highest-risk component in the current system for three reasons.
+
+First, it is the only service that calls three others synchronously in one request. A slowdown or failure in any of Inventory, Wallet, or Voucher/Promo will directly cause checkout to fail. The `CheckoutCompensationService` reduces the severity of partial failures by reversing committed side effects, but it does not remove the availability dependency.
+
+Second, the checkout path is the most business-critical transaction in the platform. A double-charged wallet, a duplicate order, or a stock inconsistency caused by a retry is a user-trust failure. The `IdempotencyRecordRepository` addresses the duplicate-order risk by making the `POST /orders/checkout` endpoint safe to retry with the same `Idempotency-Key` header.
+
+Third, the service manages state transitions that span multiple roles across time. A jastiper advancing an order to `SHIPPED` and a buyer confirming `COMPLETED` happen at different times, making the `status` column the main coordination point between actors. The `validateTransition` method enforces that only legal progressions are accepted and that cancelled or completed orders cannot be re-opened.
+
+These characteristics make Order a correctness boundary as well as a reliability boundary. The risk storming section in the group analysis identifies the synchronous checkout dependency chain as a high-priority risk. The current implementation partially mitigates it through compensation logic and idempotency, but full resilience would require circuit breakers on the downstream HTTP calls and event-driven propagation of post-payment side effects such as jastiper assignment and status notifications.

@@ -915,3 +915,49 @@ stateDiagram-v2
     FAILED --> FAILED : terminal state
     COMPLETED --> COMPLETED : terminal state
 ```
+### Code Diagram 5 — Role-Based Access per Endpoint
+
+```mermaid
+flowchart LR
+    titiper["ROLE_TITIPER"]
+    jastiper["ROLE_JASTIPER"]
+    admin["ROLE_ADMIN"]
+
+    checkout["POST /orders/checkout"]
+    myOrders["GET /orders/my"]
+    myActive["GET /orders/my/active"]
+    detail["GET /orders/{id}"]
+    jastiperOrders["GET /orders/jastiper"]
+    adminOrders["GET /orders/admin"]
+    status["PATCH /orders/{id}/status"]
+    cancel["POST /orders/{id}/cancel"]
+    rating["POST /orders/{id}/rating"]
+
+    titiper --> checkout
+    titiper --> myOrders
+    titiper --> myActive
+    titiper --> detail
+    titiper --> status
+    titiper --> rating
+
+    jastiper --> jastiperOrders
+    jastiper --> detail
+    jastiper --> status
+    jastiper --> cancel
+
+    admin --> adminOrders
+    admin --> detail
+    admin --> status
+    admin --> cancel
+```
+
+These code diagrams map directly to the Order service source files:
+
+- `OrderController` is defined at `Order/backend/src/main/java/id/ac/ui/cs/advprog/order/controller/OrderController.java`
+- `OrderService`, `CheckoutPreparationService`, and `CheckoutCompensationService` are at `Order/backend/src/main/java/id/ac/ui/cs/advprog/order/service/`
+- `InventoryClient`, `WalletClient`, and `VoucherClient` are at `Order/backend/src/main/java/id/ac/ui/cs/advprog/order/integration/`
+- `Order`, `OrderItem`, `Rating`, and `IdempotencyRecord` entities are at `Order/backend/src/main/java/id/ac/ui/cs/advprog/order/entity/`
+- All four repositories are at `Order/backend/src/main/java/id/ac/ui/cs/advprog/order/repository/`
+- The external callers shown in the component diagram map to `frontend/src/pages/CheckoutPage.jsx`, `frontend/src/pages/OrdersPage.jsx`, `frontend/src/pages/JastiperOrdersPage.jsx`, and `frontend/src/pages/AdminPage.jsx`
+
+Together these diagrams show that my individual work is centered on checkout orchestration across three downstream services, full order lifecycle management, cancel with idempotent refund, dual-dimension buyer rating, and retry-safe checkout through an idempotency key mechanism.

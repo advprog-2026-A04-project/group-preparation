@@ -723,3 +723,90 @@ flowchart LR
 This component diagram expands the **Order API** container from the group container diagram. The Order service acts as the checkout orchestrator for the whole platform. It is responsible for coordinating product snapshot reads from Inventory, wallet balance checks and deductions from Wallet, voucher validation and quota claims from Voucher/Promo, and persisting the resulting order and its line items. It is the only service in the system that calls three other services in a single request path.
  
 The service also manages the full order lifecycle after checkout: status transitions driven by jastiper and buyer roles, cancel with automatic wallet refund and stock restoration, and buyer rating submission after order completion. An `IdempotencyRecordRepository` is wired into the checkout path to prevent duplicate orders on network retry or accidental double-submit from the frontend.
+
+### Code Diagram 1 — Main Class and Module Relationships
+ 
+```mermaid
+classDiagram
+    class OrderController {
+        +checkout(auth, idempotencyKey, request)
+        +myOrders(auth)
+        +myActiveOrders(auth)
+        +jastiperOrders(auth)
+        +adminOrders(auth)
+        +detail(auth, orderId)
+        +updateStatus(auth, orderId, request)
+        +cancel(auth, orderId)
+        +rating(auth, orderId, request)
+    }
+ 
+    class OrderService {
+        +checkout(buyerId, idempotencyKey, request)
+        +listMyOrders(buyerId)
+        +listActiveOrders(buyerId)
+        +listJastiperOrders(jastiperId)
+        +listAdminOrders()
+        +getDetail(orderId, actorId, isAdmin)
+        +updateStatus(orderId, actorId, isAdmin, isJastiper, nextStatus)
+        +cancel(orderId, actorId, isAdmin, isJastiper)
+        +rate(orderId, buyerId, request)
+    }
+ 
+    class CheckoutPreparationService {
+        +prepare(request)
+        +claimVoucher(code, orderId, subtotal, buyerId)
+    }
+ 
+    class CheckoutCompensationService {
+        +compensate(order, buyerId, totalPaid, walletDeducted, reducedItems)
+    }
+ 
+    class OrderRepository {
+        +findByBuyerIdOrderByCreatedAtDesc(buyerId)
+        +findByJastiperIdOrderByCreatedAtDesc(jastiperId)
+        +findByBuyerIdAndStatusNotInOrderByCreatedAtDesc(buyerId, excluded)
+        +findAllByOrderByCreatedAtDesc()
+    }
+ 
+    class OrderItemRepository {
+        +findByOrderId(orderId)
+    }
+ 
+    class RatingRepository {
+        +findByOrderId(orderId)
+    }
+ 
+    class IdempotencyRecordRepository {
+        +findByIdemKey(idemKey)
+    }
+ 
+    class InventoryClient {
+        +getProduct(productId)
+        +reduceStock(productId, quantity)
+        +restoreStock(productId, quantity)
+    }
+ 
+    class WalletClient {
+        +getBalance(userId)
+        +deduct(userId, orderId, amount)
+        +refund(userId, orderId, amount)
+    }
+ 
+    class VoucherClient {
+        +validate(code, subtotal)
+        +claim(code, orderId, subtotal, buyerId)
+    }
+ 
+    OrderController --> OrderService
+    OrderService --> CheckoutPreparationService
+    OrderService --> CheckoutCompensationService
+    OrderService --> OrderRepository
+    OrderService --> OrderItemRepository
+    OrderService --> RatingRepository
+    OrderService --> IdempotencyRecordRepository
+    OrderService --> WalletClient
+    CheckoutPreparationService --> InventoryClient
+    CheckoutPreparationService --> VoucherClient
+    CheckoutCompensationService --> WalletClient
+    CheckoutCompensationService --> InventoryClient
+```

@@ -891,3 +891,27 @@ flowchart TD
  
     paid --> response["return OrderDetailResponse"]
 ```
+
+### Code Diagram 4 — Order Lifecycle State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING : checkout initiated
+
+    PENDING --> PAID : wallet deducted\nvoucher claimed\nstock reduced
+    PENDING --> FAILED : any step fails\ncompensation applied
+
+    PAID --> PURCHASED : JASTIPER or ADMIN advances
+    PAID --> CANCELLED : JASTIPER or ADMIN cancels\nwallet refunded\nstock restored
+
+    PURCHASED --> SHIPPED : JASTIPER or ADMIN advances
+    PURCHASED --> CANCELLED : JASTIPER or ADMIN cancels\nno refund at this stage
+
+    SHIPPED --> COMPLETED : TITIPER confirms receipt\nor ADMIN advances
+
+    COMPLETED --> COMPLETED : TITIPER submits rating\n(product + jastiper, 1-5)
+
+    CANCELLED --> CANCELLED : cancel call is idempotent\nno re-processing
+    FAILED --> FAILED : terminal state
+    COMPLETED --> COMPLETED : terminal state
+```

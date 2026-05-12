@@ -810,3 +810,58 @@ classDiagram
     CheckoutCompensationService --> WalletClient
     CheckoutCompensationService --> InventoryClient
 ```
+### Code Diagram 2 — Order Persistence Model
+ 
+```mermaid
+erDiagram
+    ORDERS {
+        bigint id PK
+        bigint buyer_id
+        bigint jastiper_id
+        string status
+        string shipping_address
+        decimal subtotal
+        decimal discount_total
+        decimal total_paid
+        string voucher_code
+        string failure_reason
+        boolean refund_done
+        timestamp created_at
+        timestamp updated_at
+    }
+ 
+    ORDER_ITEMS {
+        bigint id PK
+        bigint order_id FK
+        string product_id
+        string product_name_snapshot
+        decimal unit_price_snapshot
+        int qty
+        decimal line_total
+    }
+ 
+    RATINGS {
+        bigint id PK
+        bigint order_id FK
+        bigint buyer_id
+        int product_rating
+        int jastiper_rating
+        string comment
+        timestamp created_at
+    }
+ 
+    IDEMPOTENCY_RECORDS {
+        bigint id PK
+        string idem_key UK
+        bigint buyer_id
+        string endpoint
+        string request_hash
+        bigint order_id
+        timestamp created_at
+    }
+ 
+    ORDERS ||--o{ ORDER_ITEMS : contains
+    ORDERS ||--o| RATINGS : has
+    ORDERS ||--o| IDEMPOTENCY_RECORDS : tracks
+```
+ 

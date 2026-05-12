@@ -560,3 +560,85 @@ flowchart LR
 ```
 
 This bonus component diagram expands the **Inventory API** container from the group-level container diagram. It shows that Inventory is not just a CRUD service. It has separate entry paths for browser users and internal checkout traffic, and the same controller/service/repository stack is reused both for catalog reads and for stock mutation during checkout.
+
+#### Inventory Code Diagram 1 - Main Class Relationships
+
+```mermaid
+classDiagram
+    class ProductController {
+        +createProduct(request, authentication)
+        +updateOwnProduct(productId, request, authentication)
+        +deleteOwnProduct(productId, authentication)
+        +listMyProducts(authentication)
+        +searchByProduct(keyword)
+        +searchByJastiper(jastiperId)
+        +getProductById(productId)
+        +monitorAllProducts()
+        +adminUpdateProduct(productId, request)
+        +adminDeleteProduct(productId)
+        +reserveStock(productId, request)
+        +reduceStock(request)
+        +restoreStock(request)
+    }
+
+    class ProductService {
+        +create(request, jastiperId)
+        +listOwnedBy(jastiperId)
+        +searchByProductName(keyword)
+        +listByJastiper(jastiperId)
+        +listAll()
+        +updateOwnedProduct(productId, request, actorId)
+        +deleteOwnedProduct(productId, actorId)
+        +adminUpdateProduct(productId, request)
+        +adminDeleteProduct(productId)
+        +reserveStock(productId, quantity)
+        +getById(productId)
+        +restoreStock(productId, quantity)
+    }
+
+    class ProductMutationMapper {
+        +fromCreateRequest(request, jastiperId)
+        +applyUpdate(product, request)
+    }
+
+    class ProductRepository {
+        +findAllByJastiperId(jastiperId)
+        +searchByName(keyword)
+        +findByIdForUpdate(id)
+        +save(product)
+        +saveAndFlush(product)
+    }
+
+    class Product
+
+    ProductController --> ProductService
+    ProductService --> ProductMutationMapper
+    ProductService --> ProductRepository
+    ProductRepository --> Product
+```
+
+#### Inventory Code Diagram 2 - Stock Reservation and War-Protection Flow
+
+```mermaid
+flowchart TD
+    requestInv["ReserveStockRequest"] --> controllerInv["ProductController.reduceStock() or reserveStock()"]
+    controllerInv --> serviceInv["ProductService.reserveStock()"]
+    serviceInv --> validateQty["reject quantity <= 0"]
+    serviceInv --> lockRow["ProductRepository.findByIdForUpdate()"]
+    lockRow --> checkStock["compare requested quantity with available stock"]
+    checkStock -->|"insufficient"| insufficient["throw InsufficientStockException"]
+    checkStock -->|"enough"| decrement["product.setStock(available - quantity)"]
+    decrement --> flush["productRepository.saveAndFlush(product)"]
+    flush -->|"optimistic locking failure"| warConflict["throw WarConflictException"]
+    flush -->|"success"| successInv["return updated Product"]
+```
+
+These Inventory code diagrams map directly to:
+
+- `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/controller/ProductController.java`
+- `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/service/ProductService.java`
+- `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/service/ProductMutationMapper.java`
+- `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/repository/ProductRepository.java`
+- `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/model/Product.java`
+
+This bonus expansion is useful architecturally because it shows where the project currently protects against overselling: a locked read path (`findByIdForUpdate`) plus optimistic-lock conflict handling in `reserveStock()`. That implementation detail is one of the most important reasons Inventory appears as a risk-sensitive container in the broader group architecture.

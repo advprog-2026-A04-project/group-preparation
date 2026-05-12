@@ -864,4 +864,30 @@ erDiagram
     ORDERS ||--o| RATINGS : has
     ORDERS ||--o| IDEMPOTENCY_RECORDS : tracks
 ```
+### Code Diagram 3 — Checkout Flow with Idempotency
  
+```mermaid
+flowchart TD
+    req["CheckoutRequest + Idempotency-Key header"] --> controller["OrderController.checkout()"]
+    controller --> idemCheck["IdempotencyRecordRepository.findByIdemKey()"]
+ 
+    idemCheck -->|"key exists, orderId not null"| returnExisting["return existing OrderDetailResponse\nno re-processing"]
+    idemCheck -->|"key exists, orderId null"| conflict["throw CONFLICT\nCheckout already in progress"]
+    idemCheck -->|"key not found"| saveIdem["save IdempotencyRecord with orderId = null"]
+ 
+    saveIdem --> prepare["CheckoutPreparationService.prepare()\nfetch product snapshot from Inventory\nvalidate stock\nvalidate voucher with VoucherClient\ncalculate subtotal, discount, totalPaid"]
+ 
+    prepare --> balanceCheck["WalletClient.getBalance()\ncompare with totalPaid"]
+ 
+    balanceCheck -->|"insufficient"| rejectWallet["throw WALLET_INSUFFICIENT"]
+    balanceCheck -->|"sufficient"| persist["save Order as PENDING\nsave OrderItems"]
+ 
+    persist --> deduct["WalletClient.deduct()"]
+    deduct --> reduce["InventoryClient.reduceStock() for each item"]
+    reduce --> claim["CheckoutPreparationService.claimVoucher()\nif voucherCode present"]
+ 
+    claim -->|"claim failed"| compensate["CheckoutCompensationService.compensate()\nrefund Wallet\nrestore stock\nmark Order as FAILED"]
+    claim -->|"claim success"| paid["mark Order as PAID\nupdate IdempotencyRecord orderId"]
+ 
+    paid --> response["return OrderDetailResponse"]
+```

@@ -525,7 +525,7 @@ Together, these diagrams show that my individual work is centered on voucher val
 
 ### Bonus Additional Module View - Inventory
 
-The following bonus diagrams expand the Inventory service because it is another critical bounded context in the current checkout flow and it contains explicit concurrency handling for stock reservation.
+The following bonus diagrams expand the Inventory service as an additional architecture view. This module is a useful bonus subject because it sits directly on the checkout path and it already contains explicit stock-protection logic for war-like purchase contention.
 
 #### Inventory Component Diagram
 
@@ -559,7 +559,7 @@ flowchart LR
     productRepository --> inventoryDb
 ```
 
-This bonus component diagram expands the **Inventory API** container from the group-level container diagram. It shows that Inventory is not just a CRUD service. It has separate entry paths for browser users and internal checkout traffic, and the same controller/service/repository stack is reused both for catalog reads and for stock mutation during checkout.
+This bonus component diagram expands the **Inventory API** container from the group-level container diagram. The important architectural point is that Inventory is not only a catalog CRUD service. It also acts as a guarded stock authority for checkout, with one access path for browser traffic and another path for internal service-to-service stock mutation requested by `Order`.
 
 #### Inventory Code Diagram 1 - Main Class Relationships
 
@@ -633,7 +633,7 @@ flowchart TD
     flush -->|"success"| successInv["return updated Product"]
 ```
 
-These Inventory code diagrams map directly to:
+These Inventory code diagrams map directly to the current source files:
 
 - `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/controller/ProductController.java`
 - `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/service/ProductService.java`
@@ -641,6 +641,20 @@ These Inventory code diagrams map directly to:
 - `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/repository/ProductRepository.java`
 - `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/model/Product.java`
 
-This bonus expansion is useful architecturally because it shows where the project currently protects against overselling: a locked read path (`findByIdForUpdate`) plus optimistic-lock conflict handling in `reserveStock()`. That implementation detail is one of the most important reasons Inventory appears as a risk-sensitive container in the broader group architecture.
+Architecturally, this bonus expansion is valuable for four reasons:
 
-The Inventory code also makes the current consistency trade-off explicit: checkout stock mutation is still handled synchronously inside the request path, which is simple for correctness but makes Inventory part of the critical latency path for every order.
+1. It shows the exact place where overselling protection is implemented: `findByIdForUpdate()` combined with guarded stock mutation inside `reserveStock()`.
+2. It makes the security split visible: browser-originated requests enter through JWT-based role checks, while checkout-originated requests enter through the internal-token path.
+3. It shows that Inventory owns both product metadata and stock consistency, so it is a business-critical state holder rather than a passive data service.
+4. It exposes the current consistency trade-off clearly: stock mutation is still synchronous in the request path, which is straightforward for correctness but keeps Inventory on the critical latency path for each checkout.
+
+#### Inventory Architectural Interpretation
+
+From an architecture-review perspective, the Inventory module reinforces several conclusions from the risk storming section:
+
+- **Availability sensitivity:** if Inventory becomes unavailable, both catalog browsing and checkout stock reservation degrade immediately.
+- **Scalability sensitivity:** war traffic can produce concentrated lock contention around a small number of hot products.
+- **Coupling sensitivity:** `Order` depends on Inventory synchronously for product snapshots and stock mutation, so Inventory failures propagate into checkout failures.
+- **Data integrity sensitivity:** the service contains the main business rule that prevents negative stock, making it one of the core correctness boundaries in the current system.
+
+For that reason, Inventory is not only a supporting module. In the present architecture it behaves as one of the core reliability boundaries of the whole platform.

@@ -1143,3 +1143,129 @@ flowchart LR
     class CO,SR,RP component;
     class WD database;
 ```
+
+### Code Diagram 1 (Class Diagram, business logic only)
+
+classDiagram
+
+class WalletService {
+    <<interface>>
+
+    +getBalance(userId: Long) WalletBalanceResponse
+    +getTransactions(userId: Long) List~WalletTransaction~
+    +createTopUpRequest(request: TopUpRequestDto) Long
+    +markTopUpSuccess(topUpId: Long) boolean
+    +markTopUpFailed(topUpId: Long) boolean
+    +createWithdrawRequest(request: WithdrawRequestDto) Long
+    +markWithdrawSuccess(withdrawalId: Long) boolean
+    +markWithdrawFailed(withdrawalId: Long) boolean
+    +deduct(userId: Long, orderId: Long, amount: BigDecimal) WalletBalanceResponse
+    +refund(userId: Long, orderId: Long, amount: BigDecimal) WalletBalanceResponse
+}
+
+class WalletServiceImpl
+
+WalletServiceImpl ..|> WalletService
+
+class WalletTransactionFactory {
+    +topUpSuccess(userId: Long, requestId: Long, amount: BigDecimal) WalletTransaction
+    +withdrawSuccess(userId: Long, requestId: Long, amount: BigDecimal) WalletTransaction
+    +payment(userId: Long, orderId: Long, amount: BigDecimal) WalletTransaction
+    +refund(userId: Long, orderId: Long, amount: BigDecimal) WalletTransaction
+}
+
+class TopUpRequestRepository
+class WalletTransactionRepository
+class WithdrawalRequestRepository
+
+WalletServiceImpl --> WalletTransactionFactory
+WalletServiceImpl --> TopUpRequestRepository
+WalletServiceImpl --> WalletTransactionRepository
+WalletServiceImpl --> WithdrawalRequestRepository
+
+class Wallet {
+    +Long userId
+    +BigDecimal balance
+    +decreaseBalance(amount: BigDecimal) BigDecimal
+    +increaseBalance(amount: BigDecimal) BigDecimal
+}
+
+class WalletTransaction {
+    +Long id
+    +Long userId
+    +TransactionType type
+    +TransactionDirection direction
+    +BigDecimal amount
+    +TransactionStatus status
+    +TransactionReferenceType refType
+    +Long refId
+    +LocalDateTime createdAt
+}
+
+class TopUpRequest {
+    +Long id
+    +Long userId
+    +BigDecimal amount
+    +TransactionStatus status
+    +LocalDateTime createdAt
+}
+
+class WithdrawalRequest {
+    +Long id
+    +Long userId
+    +BigDecimal amount
+    +String destination
+    +TransactionStatus status
+    +LocalDateTime createdAt
+}
+
+class TransactionDirection {
+    <<enumeration>>
+    CREDIT
+    DEBIT
+}
+
+class TransactionReferenceType {
+    <<enumeration>>
+    TOPUP_REQUEST
+    WITHDRAWAL_REQUEST
+    ORDER
+}
+
+class TransactionStatus {
+    <<enumeration>>
+    PENDING
+    SUCCESS
+    FAILED
+}
+
+class TransactionType {
+    <<enumeration>>
+    TOPUP
+    WITHDRAWAL
+    PAYMENT
+    REFUND
+}
+
+WalletTransaction --> TransactionType
+WalletTransaction --> TransactionDirection
+WalletTransaction --> TransactionStatus
+WalletTransaction --> TransactionReferenceType
+
+TopUpRequest --> TransactionStatus
+WithdrawalRequest --> TransactionStatus
+
+class WalletController {
+    +getBalance(authentication, request) ResponseEntity
+    +getTransactions(authentication, request) ResponseEntity
+    +topUp(authentication, request) ResponseEntity
+    +topUpMarkSuccess(id: Long) ResponseEntity
+    +topUpMarkFailed(id: Long) ResponseEntity
+    +withdraw(authentication, request) ResponseEntity
+    +withdrawMarkSuccess(id: Long) ResponseEntity
+    +withdrawMarkFailed(id: Long) ResponseEntity
+    +deduct(authentication, request) ResponseEntity
+    +refund(authentication, request) ResponseEntity
+}
+
+WalletController --> WalletService

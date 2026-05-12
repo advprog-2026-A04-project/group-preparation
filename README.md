@@ -1112,3 +1112,34 @@ Third, the current architecture has no rate limiting on the `/register` and `/lo
 Relevant future mitigations: centralized secret management (Vault or equivalent), rate limiting enforced at the API Gateway level, and a token refresh mechanism to reduce JWT lifetime exposure.
 
 These diagrams map directly to the Auth service source files at `Auth-Profile/src/main/java/id/ac/ui/cs/advprog/auth/`.git
+
+## Wallet
+
+### Component Diagram
+
+Component diagram for **Wallet**:
+
+```mermaid
+flowchart LR
+    FE[Web Application]
+
+    CO[Wallet Controller]
+    SR[Wallet Service]
+    RP[Wallet Repository]
+
+    WD[(Wallet Database)]
+
+    %% Relationships
+    FE -->|Makes API calls to| CO
+    CO -->|Uses| SR
+    SR -->|Uses| RP
+    RP -->|Fetches data from / Stores data to| WD
+
+    classDef container fill:#0773af,color:#ffffff,stroke:#000000,stroke-width:3px;
+    classDef component fill:#4ea7d9,color:#ffffff,stroke:#000000,stroke-width:3px;
+    classDef database fill:#0773af,color:#ffffff,stroke:#000000,stroke-width:3px;
+
+    class FE container;
+    class CO,SR,RP component;
+    class WD database;
+```

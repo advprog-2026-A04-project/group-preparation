@@ -522,3 +522,41 @@ These code diagrams map directly to the Voucher Promo source code:
 - the external admin and checkout callers shown in the diagrams map to `frontend/src/pages/AdminPage.jsx`, `frontend/src/pages/CheckoutPage.jsx`, and `Order/backend/src/main/java/id/ac/ui/cs/advprog/order/integration/VoucherClient.java`
 
 Together, these diagrams show that my individual work is centered on voucher validation, voucher claiming, quota protection, admin voucher lifecycle management, and the persistence rules needed to keep voucher usage correct under repeated or concurrent checkout requests.
+
+### Bonus Additional Module View - Inventory
+
+The following bonus diagrams expand the Inventory service because it is another critical bounded context in the current checkout flow and it contains explicit concurrency handling for stock reservation.
+
+#### Inventory Component Diagram
+
+```mermaid
+flowchart LR
+    buyerUi["Frontend catalog and product detail pages"]
+    jastiperUi["Frontend jastiper product management flow"]
+    adminUiInv["Admin monitoring flow"]
+    orderSvcInv["Order service<br/>(InventoryClient)"]
+
+    productController["ProductController"]
+    jwtFilterInv["JwtAuthenticationFilter"]
+    internalFilterInv["InternalTokenAuthenticationFilter"]
+
+    productService["ProductService"]
+    productMapper["ProductMutationMapper"]
+    productRepository["ProductRepository"]
+    inventoryDb["Inventory database"]
+
+    buyerUi -->|"GET /api/products/search<br/>GET /api/products/{id}"| jwtFilterInv
+    jastiperUi -->|"POST/PUT/DELETE /api/products*<br/>GET /api/products/me"| jwtFilterInv
+    adminUiInv -->|"GET /api/products<br/>PUT/DELETE /api/products/admin/*"| jwtFilterInv
+    orderSvcInv -->|"GET /api/products/inventory/{id}<br/>PATCH reduce/restore-stock<br/>X-Internal-Token"| internalFilterInv
+
+    jwtFilterInv --> productController
+    internalFilterInv --> productController
+
+    productController --> productService
+    productService --> productMapper
+    productService --> productRepository
+    productRepository --> inventoryDb
+```
+
+This bonus component diagram expands the **Inventory API** container from the group-level container diagram. It shows that Inventory is not just a CRUD service. It has separate entry paths for browser users and internal checkout traffic, and the same controller/service/repository stack is reused both for catalog reads and for stock mutation during checkout.

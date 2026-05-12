@@ -121,3 +121,153 @@ flowchart TB
 
 Short explanation:
 The current deployment is best understood as a set of independently deployed Cloud Run services, one per repository, plus one public frontend service. This view is an explicit assumption based on the deploy commands documented in the READMEs. The important current characteristic is that the runtime remains fragile: most services keep state in H2 files or in-memory storage attached to the service runtime instead of durable managed databases, and public traffic reaches backend services directly rather than through a single API gateway.
+
+## Future Architecture
+
+### Future Container Diagram
+
+```mermaid
+flowchart LR
+    users["Web users<br/>(Admin, Titiper, Jastiper)"]
+
+    subgraph jsonFuture["JSON platform - proposed future state"]
+        direction LR
+        frontendFuture["Frontend SPA<br/>React + Vite + CDN"]
+        gateway["API Gateway / BFF<br/>single public API boundary"]
+
+        authFuture["Auth/Profile API"]
+        inventoryFuture["Inventory API"]
+        walletFuture["Wallet API"]
+        orderFuture["Order API / Saga orchestrator"]
+        voucherFuture["Voucher/Promo API"]
+
+        bus["Message broker / event bus<br/>for order lifecycle, retries, and async side effects"]
+        observability["Central observability<br/>logs, metrics, tracing, alerts"]
+
+        authDbFuture[("Managed Auth DB")]
+        inventoryDbFuture[("Managed Inventory DB")]
+        walletDbFuture[("Managed Wallet DB")]
+        orderDbFuture[("Managed Order DB")]
+        voucherDbFuture[("Managed Voucher DB")]
+        hotCache["Redis cache<br/>hot catalog and active voucher reads"]
+    end
+
+    users -->|"HTTPS"| frontendFuture
+    frontendFuture -->|"HTTPS REST"| gateway
+
+    gateway -->|"JWT auth, rate limit, routing"| authFuture
+    gateway -->|"JWT auth, rate limit, routing"| inventoryFuture
+    gateway -->|"JWT auth, rate limit, routing"| walletFuture
+    gateway -->|"JWT auth, rate limit, routing"| orderFuture
+    gateway -->|"JWT auth, rate limit, routing"| voucherFuture
+
+    orderFuture -->|"synchronous commands for critical reservation/payment checks"| inventoryFuture
+    orderFuture -->|"synchronous commands for critical reservation/payment checks"| walletFuture
+    orderFuture -->|"synchronous commands for critical reservation/payment checks"| voucherFuture
+
+    orderFuture -->|"publish domain events"| bus
+    inventoryFuture -->|"consume and publish stock events"| bus
+    walletFuture -->|"consume and publish payment events"| bus
+    voucherFuture -->|"consume and publish voucher events"| bus
+
+    inventoryFuture -->|"cache hot reads"| hotCache
+    voucherFuture -->|"cache active vouchers"| hotCache
+
+    authFuture -->|"JPA / JDBC"| authDbFuture
+    inventoryFuture -->|"JPA / JDBC"| inventoryDbFuture
+    walletFuture -->|"JPA / JDBC"| walletDbFuture
+    orderFuture -->|"JPA / JDBC"| orderDbFuture
+    voucherFuture -->|"JPA / JDBC"| voucherDbFuture
+
+    observability -.-> gateway
+    observability -.-> authFuture
+    observability -.-> inventoryFuture
+    observability -.-> walletFuture
+    observability -.-> orderFuture
+    observability -.-> voucherFuture
+```
+
+### Future Deployment Diagram
+
+```mermaid
+flowchart TB
+    browser["User browser"]
+
+    subgraph edge["Public edge"]
+        cdn["CDN + HTTPS load balancer"]
+        gatewayRun["API Gateway / BFF<br/>multiple instances"]
+    end
+
+    subgraph gcpFuture["Cloud Run / managed services production environment"]
+        frontendRunFuture["Frontend service<br/>multiple instances"]
+
+        subgraph privateNet["Private service network"]
+            authRunFuture["Auth/Profile service<br/>autoscaled"]
+            inventoryRunFuture["Inventory service<br/>autoscaled"]
+            walletRunFuture["Wallet service<br/>autoscaled"]
+            orderRunFuture["Order service<br/>autoscaled"]
+            voucherRunFuture["Voucher service<br/>autoscaled"]
+            busFuture["Managed message broker"]
+            obsFuture["Managed logs, metrics, tracing"]
+            redisFuture["Redis cache"]
+        end
+
+        authDbRun[("Managed Auth DB<br/>backup + PITR")]
+        inventoryDbRun[("Managed Inventory DB<br/>backup + PITR")]
+        walletDbRun[("Managed Wallet DB<br/>backup + PITR")]
+        orderDbRun[("Managed Order DB<br/>backup + PITR")]
+        voucherDbRun[("Managed Voucher DB<br/>backup + PITR")]
+    end
+
+    browser -->|"HTTPS"| cdn
+    cdn -->|"static assets"| frontendRunFuture
+    cdn -->|"API calls"| gatewayRun
+
+    gatewayRun -->|"private HTTPS"| authRunFuture
+    gatewayRun -->|"private HTTPS"| inventoryRunFuture
+    gatewayRun -->|"private HTTPS"| walletRunFuture
+    gatewayRun -->|"private HTTPS"| orderRunFuture
+    gatewayRun -->|"private HTTPS"| voucherRunFuture
+
+    orderRunFuture -->|"private HTTPS"| inventoryRunFuture
+    orderRunFuture -->|"private HTTPS"| walletRunFuture
+    orderRunFuture -->|"private HTTPS"| voucherRunFuture
+    orderRunFuture -->|"events"| busFuture
+    inventoryRunFuture -->|"events"| busFuture
+    walletRunFuture -->|"events"| busFuture
+    voucherRunFuture -->|"events"| busFuture
+
+    inventoryRunFuture --> redisFuture
+    voucherRunFuture --> redisFuture
+
+    authRunFuture --- authDbRun
+    inventoryRunFuture --- inventoryDbRun
+    walletRunFuture --- walletDbRun
+    orderRunFuture --- orderDbRun
+    voucherRunFuture --- voucherDbRun
+
+    obsFuture -.-> gatewayRun
+    obsFuture -.-> authRunFuture
+    obsFuture -.-> inventoryRunFuture
+    obsFuture -.-> walletRunFuture
+    obsFuture -.-> orderRunFuture
+    obsFuture -.-> voucherRunFuture
+```
+
+### Architectural Improvements
+
+The future architecture addresses the main weaknesses of the current implementation:
+
+- A single API Gateway or BFF becomes the only public API boundary, so browsers no longer call every backend directly.
+- Each service moves from embedded H2 or in-memory runtime storage to a managed database with backup and point-in-time recovery.
+- The checkout path remains synchronous only where immediate consistency is necessary, while non-critical side effects move to an event bus to reduce coupling and improve recovery behavior.
+- Observability becomes a first-class architecture concern through centralized logs, metrics, tracing, and alerting.
+- Hot reads such as active vouchers and frequently viewed catalog items can be cached to reduce repetitive database pressure during flash-sale or war traffic.
+- Private service-to-service networking reduces exposure of internal APIs and makes token management easier to control.
+
+### Trade-offs
+
+- Introducing an API gateway and message broker adds operational complexity and deployment cost.
+- Saga-style coordination and asynchronous events improve resilience, but they also increase consistency design work and debugging difficulty.
+- Managed databases and Redis improve durability and scale, but they require schema migration discipline, backup operations, and capacity management.
+- Centralized observability and secret management improve supportability and security, but they add platform dependencies that the team must maintain.

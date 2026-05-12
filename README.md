@@ -642,3 +642,5 @@ These Inventory code diagrams map directly to:
 - `Inventory/src/main/java/id/ac/ui/cs/advprog/inventory/model/Product.java`
 
 This bonus expansion is useful architecturally because it shows where the project currently protects against overselling: a locked read path (`findByIdForUpdate`) plus optimistic-lock conflict handling in `reserveStock()`. That implementation detail is one of the most important reasons Inventory appears as a risk-sensitive container in the broader group architecture.
+
+The Inventory code also makes the current consistency trade-off explicit: checkout stock mutation is still handled synchronously inside the request path, which is simple for correctness but makes Inventory part of the critical latency path for every order.

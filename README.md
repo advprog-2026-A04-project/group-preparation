@@ -321,7 +321,7 @@ The group consensus is that the highest-priority risks are:
 3. weak edge control caused by direct frontend-to-service traffic,
 4. poor diagnosability when failures span several services.
 
-These were treated as the key risks because they directly affect user trust, transaction success, and the team’s ability to operate the system once traffic grows.
+These were treated as the key risks because they directly affect user trust, transaction success, and the team's ability to operate the system once traffic grows.
 
 ### Mitigation Strategy
 
@@ -343,3 +343,182 @@ The future architecture section is a direct consequence of the risk storming dis
 - managed databases and backup strategy exist because service-local H2 storage is too fragile,
 - Redis is introduced because war traffic will repeatedly hit the same catalog and voucher reads,
 - observability is elevated into its own platform concern because the current repositories do not provide cross-service visibility by default.
+
+## Individual Architecture Work
+
+My individual responsibility: **Voucher Promo**
+
+### Component Diagram
+
+```mermaid
+flowchart LR
+    checkoutUi["Frontend checkout flow<br/>(frontend/src/pages/CheckoutPage.jsx)"]
+    adminUi["Frontend admin console<br/>(frontend/src/pages/AdminPage.jsx)"]
+    orderService["Order service<br/>(order.integration.VoucherClient)"]
+
+    publicController["VoucherController<br/>GET /vouchers/active<br/>POST /vouchers/validate<br/>POST /vouchers/claim"]
+    adminController["AdminVoucherController<br/>POST /admin/vouchers<br/>GET /admin/vouchers<br/>PUT /admin/vouchers/{id}<br/>POST /admin/vouchers/{id}/disable"]
+    healthController["HealthController<br/>GET /health"]
+
+    internalFilter["InternalTokenFilter<br/>protects /vouchers/validate and /vouchers/claim"]
+    adminFilter["AdminTokenFilter<br/>protects /admin/*"]
+
+    voucherService["VoucherService"]
+    voucherPolicy["VoucherPolicy"]
+    voucherRepo["VoucherRepository"]
+    redemptionRepo["VoucherRedemptionRepository"]
+
+    voucherDb[("Voucher database")]
+
+    checkoutUi -->|"GET /vouchers/active"| publicController
+    adminUi -->|"voucher admin requests + X-Admin-Token"| adminFilter
+    orderService -->|"validate/claim + X-Internal-Token"| internalFilter
+
+    internalFilter --> publicController
+    adminFilter --> adminController
+
+    publicController --> voucherService
+    adminController --> voucherService
+    healthController -->|"checks DB connectivity"| voucherDb
+
+    voucherService --> voucherPolicy
+    voucherService --> voucherRepo
+    voucherService --> redemptionRepo
+
+    voucherRepo --> voucherDb
+    redemptionRepo --> voucherDb
+```
+
+This component diagram expands the **Voucher/Promo API** container from the group container diagram. In the group view, Voucher/Promo appears as one backend service. In this zoomed-in view, that service is decomposed into public/admin controllers, security filters, application service logic, policy validation logic, repositories, and the persistence layer that stores voucher definitions and voucher claims.
+
+### Code Diagram 1 - Main Class and Module Relationships
+
+```mermaid
+classDiagram
+    class VoucherController {
+        +getActiveVouchers()
+        +validateVoucher(request)
+        +claimVoucher(request)
+    }
+
+    class AdminVoucherController {
+        +createVoucher(request)
+        +listVouchers(status)
+        +editVoucher(id, request)
+        +disableVoucher(id)
+    }
+
+    class VoucherService {
+        +getActiveVouchers()
+        +getAdminVouchers(status)
+        +validateVoucher(request)
+        +claimVoucher(request)
+        +createVoucher(request)
+        +editVoucher(id, request)
+        +disableVoucher(id)
+    }
+
+    class VoucherPolicy {
+        +normalizeCode(code)
+        +validateVoucherDefinition(...)
+        +ensureVoucherEditable(...)
+        +validateVoucherUsability(...)
+        +calculateDiscount(...)
+    }
+
+    class VoucherRepository {
+        +findByCode(code)
+        +findByCodeForUpdate(code)
+        +findAllByOrderByCreatedAtDesc()
+        +findByStatusOrderByCreatedAtDesc(status)
+        +markExpiredVouchers(...)
+    }
+
+    class VoucherRedemptionRepository {
+        +findByVoucherIdAndOrderId(voucherId, orderId)
+        +save(redemption)
+    }
+
+    class InternalTokenFilter
+    class AdminTokenFilter
+
+    VoucherController --> VoucherService
+    AdminVoucherController --> VoucherService
+    VoucherService --> VoucherPolicy
+    VoucherService --> VoucherRepository
+    VoucherService --> VoucherRedemptionRepository
+    InternalTokenFilter --> VoucherController
+    AdminTokenFilter --> AdminVoucherController
+```
+
+### Code Diagram 2 - Voucher Persistence Model
+
+```mermaid
+erDiagram
+    VOUCHERS {
+        bigint id PK
+        string code UK
+        string discount_type
+        decimal discount_value
+        datetime start_at
+        datetime end_at
+        decimal min_spend
+        int quota_total
+        int quota_remaining
+        string status
+        bigint version
+    }
+
+    VOUCHER_REDEMPTIONS {
+        bigint id PK
+        bigint voucher_id FK
+        string order_id
+        bigint buyer_id
+        decimal order_amount
+        decimal discount_applied
+        timestamp claimed_at
+    }
+
+    VOUCHERS ||--o{ VOUCHER_REDEMPTIONS : records
+```
+
+### Code Diagram 3 - Voucher Claim Flow
+
+```mermaid
+flowchart TD
+    request["ClaimVoucherRequest"] --> controller["VoucherController.claimVoucher()"]
+    controller --> service["VoucherService.claimVoucher()"]
+    service --> normalize["VoucherPolicy.normalizeCode()"]
+    service --> lock["VoucherRepository.findByCodeForUpdate()"]
+    service --> existing["VoucherRedemptionRepository.findByVoucherIdAndOrderId()"]
+
+    existing -->|"already exists"| idem["Return idempotent ClaimVoucherResponse"]
+    existing -->|"not found"| validate["VoucherPolicy.validateVoucherUsability()"]
+
+    validate -->|"invalid"| reject["Return failed ClaimVoucherResponse"]
+    validate -->|"valid"| calc["VoucherPolicy.calculateDiscount()"]
+    calc --> save["VoucherRedemptionRepository.save()"]
+    save --> quota["voucher.setQuotaRemaining(quotaRemaining - 1)"]
+    quota --> success["Return success ClaimVoucherResponse"]
+```
+
+### Code Diagram 4 - Security-Relevant Entry Paths
+
+```mermaid
+flowchart LR
+    publicRead["frontend CheckoutPage"] -->|"GET /vouchers/active"| publicCtrl["VoucherController"]
+    internalCaller["Order.integration.VoucherClient"] -->|"POST /vouchers/validate and /vouchers/claim<br/>X-Internal-Token"| internalGuard["InternalTokenFilter"]
+    adminCaller["frontend AdminPage"] -->|"GET/POST/PUT /admin/vouchers*<br/>X-Admin-Token"| adminGuard["AdminTokenFilter"]
+
+    internalGuard --> publicCtrl
+    adminGuard --> adminCtrl["AdminVoucherController"]
+```
+
+These code diagrams map directly to the Voucher Promo source code:
+
+- `VoucherController`, `AdminVoucherController`, `VoucherService`, `VoucherPolicy`, `VoucherRepository`, and `VoucherRedemptionRepository` are defined under `Voucher-Promo/backend/src/main/java/com/example/demo/voucher/...`
+- `InternalTokenFilter` and `AdminTokenFilter` are defined under `Voucher-Promo/backend/src/main/java/com/example/demo/security/...`
+- the `Voucher` and `VoucherRedemption` tables come from the JPA entities and Flyway migrations in `Voucher-Promo/backend/src/main/resources/db/migration/...`
+- the external admin and checkout callers shown in the diagrams map to `frontend/src/pages/AdminPage.jsx`, `frontend/src/pages/CheckoutPage.jsx`, and `Order/backend/src/main/java/id/ac/ui/cs/advprog/order/integration/VoucherClient.java`
+
+Together, these diagrams show that my individual work is centered on voucher validation, voucher claiming, quota protection, admin voucher lifecycle management, and the persistence rules needed to keep voucher usage correct under repeated or concurrent checkout requests.

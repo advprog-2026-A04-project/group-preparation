@@ -1146,6 +1146,7 @@ flowchart LR
 
 ### Code Diagram 1 (Class Diagram, business logic only)
 
+```mermaid
 classDiagram
 
 class WalletService {
@@ -1269,3 +1270,4 @@ class WalletController {
 }
 
 WalletController --> WalletService
+```
